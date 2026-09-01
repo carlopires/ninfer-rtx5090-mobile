@@ -76,6 +76,11 @@ target_include_directories(ninfer_sampling_defaults_test PRIVATE
   ${PROJECT_SOURCE_DIR}/src/targets/qwen3_6/export
   ${PROJECT_SOURCE_DIR}/src/targets/qwen3_6_27b/export
   ${PROJECT_SOURCE_DIR}/src/targets/qwen3_6_35b_a3b/export)
+ninfer_add_test(ninfer_perplexity_evaluation_test
+  SOURCES test_perplexity_evaluation.cpp
+          ${PROJECT_SOURCE_DIR}/apps/perplexity/evaluation.cpp)
+target_include_directories(ninfer_perplexity_evaluation_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/apps/perplexity)
 ninfer_add_test(ninfer_cli_options_test
   SOURCES test_cli_options.cpp ${PROJECT_SOURCE_DIR}/apps/cli/options.cpp)
 target_include_directories(ninfer_cli_options_test PRIVATE ${PROJECT_SOURCE_DIR}/apps/cli)
@@ -135,6 +140,10 @@ ninfer_add_test(ninfer_qwen3_6_27b_mtp_greedy_parity_real_test
   LIBRARIES ninfer_engine)
 set_tests_properties(ninfer_qwen3_6_27b_mtp_greedy_parity_real_test
   PROPERTIES SKIP_RETURN_CODE 77)
+ninfer_add_test(ninfer_qwen3_6_27b_score_real_test
+  SOURCES targets/qwen3_6_27b/test_engine_score_real.cpp
+  LIBRARIES ninfer_engine)
+set_tests_properties(ninfer_qwen3_6_27b_score_real_test PROPERTIES SKIP_RETURN_CODE 77)
 ninfer_add_test(ninfer_qwen3_6_27b_load_plan_test
   SOURCES targets/qwen3_6_27b/test_load_plan.cpp
   NEEDS_SOURCE_DIR
@@ -237,6 +246,7 @@ set(ninfer_op_tests
   scalar
   cast
   scatter
+  target_logprobs
   position)
 foreach(op IN LISTS ninfer_op_tests)
   ninfer_add_op_test(ninfer_${op}_test
@@ -252,12 +262,28 @@ ninfer_add_op_test(ninfer_softmax_attention_test
           ops/softmax_attention/plain_and_packed.cpp
           ops/softmax_attention/context.cpp
   LIBRARIES ninfer_ops)
+add_test(NAME ninfer_softmax_attention_nvfp4_test
+  COMMAND ninfer_softmax_attention_test --nvfp4-only)
+add_test(NAME ninfer_softmax_attention_k8v4_test
+  COMMAND ninfer_softmax_attention_test --k8v4-only)
+set_tests_properties(
+  ninfer_softmax_attention_nvfp4_test
+  ninfer_softmax_attention_k8v4_test
+  PROPERTIES SKIP_RETURN_CODE 77)
 ninfer_add_op_test(ninfer_sliding_window_attention_test
   SOURCES ops/test_sliding_window_attention.cpp
   LIBRARIES ninfer_ops)
 ninfer_add_op_test(ninfer_kv_cache_append_test
   SOURCES ops/test_kv_cache_append.cpp
   LIBRARIES ninfer_ops)
+add_test(NAME ninfer_kv_cache_append_nvfp4_test
+  COMMAND ninfer_kv_cache_append_test --nvfp4-only)
+add_test(NAME ninfer_kv_cache_append_k8v4_test
+  COMMAND ninfer_kv_cache_append_test --k8v4-only)
+set_tests_properties(
+  ninfer_kv_cache_append_nvfp4_test
+  ninfer_kv_cache_append_k8v4_test
+  PROPERTIES SKIP_RETURN_CODE 77)
 ninfer_add_op_test(ninfer_prepare_masked_block_test
   SOURCES ops/test_prepare_masked_block.cpp
   LIBRARIES ninfer_ops)

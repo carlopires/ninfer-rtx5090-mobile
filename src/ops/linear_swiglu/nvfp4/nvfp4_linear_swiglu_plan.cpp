@@ -21,7 +21,7 @@ enum class Nvfp4LinearSwiGluRoute {
     TmaFusedW4A4,
 };
 
-constexpr std::int32_t kPrimaryT = 1024;
+constexpr std::int32_t kTmaBlockM = 256;
 
 Nvfp4LinearSwiGluRoute resolve_route(LinearPolicy policy, std::int32_t tokens) {
     if (tokens <= 0) { throw std::invalid_argument("nvfp4 linear_swiglu: T must be positive"); }
@@ -34,7 +34,9 @@ Nvfp4LinearSwiGluRoute resolve_route(LinearPolicy policy, std::int32_t tokens) {
         throw std::invalid_argument("nvfp4 linear_swiglu A16 is registered only through T=16");
     }
     if (tokens <= 48) { return Nvfp4LinearSwiGluRoute::FusedW4A4; }
-    if (tokens == kPrimaryT) { return Nvfp4LinearSwiGluRoute::TmaFusedW4A4; }
+    if (tokens >= kTmaBlockM && (tokens % kTmaBlockM) == 0) {
+        return Nvfp4LinearSwiGluRoute::TmaFusedW4A4;
+    }
     return Nvfp4LinearSwiGluRoute::LinearW4A4Post;
 }
 
@@ -86,8 +88,11 @@ std::size_t nvfp4_linear_swiglu_workspace_capacity_bytes(LinearPolicy policy,
 
     std::size_t maximum = 0;
     if (min_tokens <= 48) { maximum = fused_workspace_bytes(std::min(max_tokens, 48)); }
-    if (min_tokens <= kPrimaryT && max_tokens >= kPrimaryT) {
-        maximum = fused_workspace_bytes(kPrimaryT);
+    if (max_tokens >= kTmaBlockM) {
+        const std::int32_t largest_fused = max_tokens - (max_tokens % kTmaBlockM);
+        if (largest_fused >= std::max(min_tokens, kTmaBlockM)) {
+            maximum = std::max(maximum, fused_workspace_bytes(largest_fused));
+        }
     }
 
     std::int32_t last_baseline = max_tokens;
