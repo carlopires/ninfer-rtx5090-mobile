@@ -317,9 +317,106 @@ both validated.
 - update `docs/performance.md` only from reproducible campaigns;
 - keep experimental results out of product defaults until the relevant workload shows a stable win.
 
-## First recommended experiment
+## Exploration results (2026-09-02)
 
-Profile MTP3 at concurrency 1 and 4 on INT8 KV, then measure the contribution of the serial compact
-attention launches. In parallel, port the small-batch NVFP4 SwiGLU and laptop-specific MTP tuning as
-separate benchmark branches. This provides a quick path to hardware-specific gains while the larger
-single-launch canonical verification kernel is designed and qualified.
+### Environment and method
+
+Measurements below used the repository's Release build (`CUDA 13.1.115`, `sm_120a`) on the RTX
+5090 Laptop. Operator campaigns used 10 warm-up calls followed by 50 repetitions and report median
+latency. Every candidate was built and measured from its own `perf/quasar-*` worktree based on
+`b64370a5`; raw CSV and logs remain under each ignored worktree's `profiles/bench/` directory.
+NVIDIA's CUDA Programming Guide was used to constrain launch-shape work: block dimensions remain
+warp multiples, occupancy is treated as a means rather than an objective, and shared-memory and
+resident-block changes are benchmarked rather than assumed beneficial. The Blackwell tuning work
+also retains the repository's `sm_120a` feature target and native NVFP4 MMA implementation.
+
+### Accepted operator candidates
+
+Three independent changes produced repeatable operator-level wins and passed their affected
+numerical tests. Artifact-backed parity then rejected one of them; the two safe candidates remain
+combined on `perf/quasar-swiglu-m16n256`.
+
+| Candidate | Measured result | Correctness evidence | Recommendation |
+|---|---|---|---|
+| NVFP4 SwiGLU M16N256 for T=1..16 | 4.7% faster at T=1; 5.7–7.8% faster at T=2..16; neutral at T=24; 1.4% slower at T=48 | `ninfer_linear_swiglu_nvfp4_test` passes | Retain only through T=16; keep M48N64 for T=17..48 |
+| NVFP4 GDN input M16N256 at T=4 | 9.1% faster (73.728 to 67.584 us) | `ninfer_gdn_input_proj_test` passes | Retain the exact T=4 route |
+| NVFP4 K=6144 LinearAdd W4A4 at T>=4 | 1.31x at T=4, 1.56x at T=6, 2.81x at T=16, and 8.12x at T=48 | Operator test passes, but real greedy parity fails | **Rejected and reverted** |
+
+The combined branch rerun reproduced these deltas and all three operator tests passed together.
+Artifact-backed BF16/INT8 ordinary and MTP k1..k5 parity at C=1..8 passes with SwiGLU plus GDN, but
+adding the LinearAdd crossover fails at BF16 ordinary C=4, token 25 (`expected=1534 actual=7936`).
+This is expected: changing the compact GDN output from its canonical A16 reduction profile changes
+observable greedy behavior despite acceptable operator tolerance. The LinearAdd commit was reverted.
+The retained SwiGLU and GDN results remain operator claims until repeated end-to-end decode evidence
+is collected.
+
+### Compact INT8 verification experiment: rejected implementation, confirmed priority
+
+The serial production route measured almost linearly in width. At 32K context, W=2..6 took
+155.168, 231.328, 318.912, 399.520, and 480.448 us. A simple one-call wide-token route reduced
+these to 91.840, 98.272, 106.464, 118.208, and 150.848 us (1.69–3.38x) and the attention operator
+suite passed, but it increased workspace by up to 6x and failed real exact parity:
+
+```text
+int8 MTP k=2 C=1 iteration=0 row=0 mismatch at token 38: expected=694 actual=303
+```
+
+The experiment was reverted on `perf/quasar-int8-compact`. This strongly confirms that launch
+serialization is worth fixing, but also confirms that the proposed canonical per-column arithmetic
+is mandatory. Do not merge the naive wide-token route. The next implementation should use one grid
+with an independent column dimension and the exact T=1 producer/reduction profile, rather than the
+existing TokenTile=2..6 implementations.
+
+### KV profile matrix
+
+A C=1, W=1 warm-cache attention matrix measured the following median microseconds:
+
+| Context | BF16 | INT8 | FP8 | NVFP4 | K8V4 |
+|---:|---:|---:|---:|---:|---:|
+| 4K | 24.512 | 18.016 | 16.576 | 19.744 | **16.000** |
+| 32K | 181.728 | 78.112 | 74.144 | 91.360 | **58.816** |
+| 96K | 597.952 | 309.504 | 289.216 | 275.936 | **252.864** |
+| 128K | 783.712 | 415.712 | 382.336 | 353.984 | **329.568** |
+
+K8V4 is the best latency/capacity candidate in this operator matrix. NVFP4 overtakes INT8 only at
+long context (about 96K here), while FP8 is consistently faster than INT8 but offers little storage
+relief. Product defaults must not change from these timings alone: K8V4/NVFP4 still need quality or
+perplexity qualification and end-to-end concurrency/admission measurements.
+
+### Ideas stopped without product changes
+
+- **Prefill tails:** baseline routing has severe isolated discontinuities, but a correct masked TMA
+  tail requires extending tensor-map bounds/padding and numerical qualification. This was not mixed
+  into the low-risk branch without end-to-end evidence that final tails own meaningful TTFT.
+- **Adaptive MTP:** the historical k15 implementation spans 92 files and embeds hardware cost
+  tables. Porting it before obtaining reliable k1..k5 round costs would not be attributable. Keep
+  fixed MTP3 for now; revisit a k1..k5 controller after the compact INT8 canonical kernel lands.
+- **KV producer/append fusion:** low-bit attention decoding—not append—was the measured target in
+  this pass. No fusion was attempted without trace evidence that append/codec time is material.
+- **Scheduler/context cache:** no policy change was made because this pass had no repeated-prefix or
+  Host-resume corpus showing scheduler ownership of TTFT.
+- **Historical GQA split tuning:** its source path was superseded by the merged causal-attention
+  architecture, so it was not transplanted blindly.
+
+### Benchmark limitation found
+
+`ninfer_qwen3_6_27b_mtp_round_bench` currently constructs package internals without Engine option
+normalization and fails with `Qwen3.6 context cache options are not normalized`. A temporary local
+normalization proved that the benchmark then fails its native-MTP-path assertion, so the workaround
+was reverted. Use the real greedy-parity test and CLI/corpus runner for final validation; repair the
+benchmark separately rather than conflating that repair with an optimization.
+
+## Updated recommendations
+
+1. **Prepare for merge after final model validation:** the retained SwiGLU and GDN route changes are
+   small, measured, operator-qualified, and pass the full artifact-backed BF16/INT8 ordinary plus
+   MTP k1..k5 parity matrix at C=1..8. Run the QUASAR load plan and repeated end-to-end MTP3 C=1/C=4
+   campaign before merging.
+2. **Highest-value next engineering item:** implement single-launch INT8 verification using an
+   independent canonical T=1 column dimension. The naive route's large speedup and parity failure
+   make both the payoff and arithmetic constraint explicit.
+3. **Prefer K8V4 for the next long-context product campaign:** it won every tested C=1 attention
+   point; gate any recommendation on perplexity/quality and complete-request results.
+4. **Do not merge:** the LinearAdd W4A4 crossover or naive wide INT8 experiment, both rejected by
+   exact parity. Also defer adaptive MTP, masked prefill-tail TMA, KV fusion, and scheduler changes;
+   their benefit is unmeasured end to end.
