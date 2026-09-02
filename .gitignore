@@ -63,6 +63,7 @@ profiles/
 # Local development directories
 models/
 scripts/
+work/
 worktrees/
 
 # Claude Code personal/local settings (may contain API tokens)
