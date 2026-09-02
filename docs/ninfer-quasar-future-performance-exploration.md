@@ -408,10 +408,10 @@ benchmark separately rather than conflating that repair with an optimization.
 
 ## Updated recommendations
 
-1. **Prepare for merge after final model validation:** the retained SwiGLU and GDN route changes are
-   small, measured, operator-qualified, and pass the full artifact-backed BF16/INT8 ordinary plus
-   MTP k1..k5 parity matrix at C=1..8. Run the QUASAR load plan and repeated end-to-end MTP3 C=1/C=4
-   campaign before merging.
+1. **Merge the retained kernel commit:** the retained SwiGLU and GDN route changes are small,
+   measured, operator-qualified, and pass the full artifact-backed BF16/INT8 ordinary plus MTP
+   k1..k5 parity matrix at C=1..8. Treat the measured gains as operator-level until a repaired
+   benchmark or repeated CLI/corpus MTP3 C=1/C=4 campaign establishes end-to-end impact.
 2. **Highest-value next engineering item:** implement single-launch INT8 verification using an
    independent canonical T=1 column dimension. The naive route's large speedup and parity failure
    make both the payoff and arithmetic constraint explicit.
